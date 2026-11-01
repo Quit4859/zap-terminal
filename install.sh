@@ -24,14 +24,22 @@ if sys.version_info < (3, 10):
     raise SystemExit(1)
 PY
 
-say "Installing ZAP into $INSTALL_DIR"
-mkdir -p "$(dirname "$INSTALL_DIR")" "$BIN_DIR"
-
 if [ -d "$INSTALL_DIR/.git" ]; then
+  say "ZAP is already installed at $INSTALL_DIR"
+  say "Checking for updates..."
   git -C "$INSTALL_DIR" fetch --quiet origin "$BRANCH"
-  git -C "$INSTALL_DIR" checkout --quiet "$BRANCH"
-  git -C "$INSTALL_DIR" reset --hard --quiet "origin/$BRANCH"
+  LOCAL="$(git -C "$INSTALL_DIR" rev-parse @)"
+  REMOTE="$(git -C "$INSTALL_DIR" rev-parse "@{u}")"
+  if [ "$LOCAL" = "$REMOTE" ]; then
+    say "ZAP is already up to date."
+  else
+    say "Update available. Updating ZAP..."
+    git -C "$INSTALL_DIR" checkout --quiet "$BRANCH"
+    git -C "$INSTALL_DIR" reset --hard --quiet "origin/$BRANCH"
+  fi
 else
+  say "Installing ZAP into $INSTALL_DIR"
+  mkdir -p "$(dirname "$INSTALL_DIR")" "$BIN_DIR"
   if [ -e "$INSTALL_DIR" ]; then
     fail "$INSTALL_DIR exists but is not a Git repository. Move it and rerun."
   fi
