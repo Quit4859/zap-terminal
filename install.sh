@@ -30,7 +30,7 @@ mkdir -p "$(dirname "$INSTALL_DIR")" "$BIN_DIR"
 if [ -d "$INSTALL_DIR/.git" ]; then
   git -C "$INSTALL_DIR" fetch --quiet origin "$BRANCH"
   git -C "$INSTALL_DIR" checkout --quiet "$BRANCH"
-  git -C "$INSTALL_DIR" pull --quiet --ff-only origin "$BRANCH"
+  git -C "$INSTALL_DIR" reset --hard --quiet "origin/$BRANCH"
 else
   if [ -e "$INSTALL_DIR" ]; then
     fail "$INSTALL_DIR exists but is not a Git repository. Move it and rerun."
