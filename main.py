@@ -187,7 +187,14 @@ class ZapTerminal(App):
         elif cmd == "clear": self.log().clear(); self.status("VIEW CLEARED")
         elif raw.startswith(("http://", "https://", "www.")) or "." in cmd:
             await self.open_url(raw)
-        else: self.status("UNKNOWN COMMAND • Type help")
+        elif cmd.isdigit() and self.links:
+            n = int(cmd)
+            if 1 <= n <= len(self.links):
+                await self.open_url(self.links[n-1]["href"])
+            else:
+                self.status("LINK NOT FOUND")
+        else:
+            await self.search(raw)
 
     async def open_url(self, url, record=True):
         if not url:
@@ -242,7 +249,10 @@ class ZapTerminal(App):
             if line:
                 log.write(line)
         log.write("")
-        log.write(f"LINKS FOUND: {len(self.links)}  •  Type links to list them")
+        log.write("LINKS:")
+        for i, link in enumerate(self.links, 1):
+            log.write(f"[{i}] {link['text'][:90]} — {link['href']}")
+        log.write("")
         log.write("Tip: type a link number to open it.")
 
     async def search(self, query):
