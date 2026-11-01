@@ -49,7 +49,42 @@ cd "$INSTALL_DIR"
 "$PYTHON" -m venv .venv
 "$INSTALL_DIR/.venv/bin/python" -m pip install --quiet --upgrade pip
 "$INSTALL_DIR/.venv/bin/python" -m pip install --quiet -e .
+
+say "Installing Chromium browser dependencies..."
 "$INSTALL_DIR/.venv/bin/python" -m playwright install chromium
+
+# Install system shared libraries Chromium needs to launch headlessly.
+install_sys_deps() {
+  if command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get update -qq 2>/dev/null || true
+    sudo apt-get install -y -qq \
+      libatk1.0-0 libatk-bridge2.0-0 libasound2t64 libgbm-dev libgtk-3-0 \
+      libnss3 libxss1 libxtst6 libxrandr2 libatspi2.0-0 libxcomposite1 \
+      libxdamage1 libxfixes3 libxkbcommon0 libx11-xcb1 libxcb-dri3-0 \
+      libxcb-xfixes0 libxcb-randr0 libxcb-shm0 libcups2 libdrm2 \
+      libpango-1.0-0 libpangocairo-1.0-0 2>/dev/null || true
+  elif command -v apk >/dev/null 2>&1; then
+    sudo apk add --no-cache \
+      atk atk-bridge cairo gdk-pixbuf gtk+3.0 libxcomposite libxcursor \
+      libxdamage libxi libxtst nss pango udev xorg-server 2>/dev/null || true
+  elif command -v dnf >/dev/null 2>&1; then
+    sudo dnf install -y \
+      atk atk-bridge cairo gdk-pixbuf2 gtk3 libXcomposite libXcursor \
+      libXdamage libXi libXtst nss pango xorg-x11-server-Xorg 2>/dev/null || true
+  elif command -v yum >/dev/null 2>&1; then
+    sudo yum install -y \
+      atk atk-bridge cairo gdk-pixbuf2 gtk3 libXcomposite libXcursor \
+      libXdamage libXi libXtst nss pango xorg-x11-server-Xorg 2>/dev/null || true
+  elif command -v pacman >/dev/null 2>&1; then
+    sudo pacman -S --needed --noconfirm \
+      atk at-spi2-core cairo gdk-pixbuf2 gtk3 libxcomposite libxcursor \
+      libxdamage libxi libxtst nss pango xorg-server 2>/dev/null || true
+  elif command -v brew >/dev/null 2>&1; then
+    brew install chromium 2>/dev/null || true
+  fi
+}
+
+install_sys_deps
 
 cat > "$BIN_DIR/zap" <<EOF
 #!/usr/bin/env bash
