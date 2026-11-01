@@ -229,31 +229,117 @@ class ZapTerminal(App):
             self.log().write(str(exc))
             self.status("PAGE LOAD ERROR")
 
+    def _render_inline(self, node, link_counter, log, depth=0):
+        """Render an element's inline text, replacing <a> tags with [N] links."""
+        parts = []
+        for child in node.children:
+            name = getattr(child, "name", None)
+            if name is None:
+                text = str(child).strip()
+                if text:
+                    parts.append(text)
+            elif name == "a":
+                href = child.get("href", "")
+                text = child.get_text(" ", strip=True)
+                if href and href.startswith("http") and text:
+                    link_counter[0] += 1
+                    self.links.append({"text": text, "href": href})
+                    parts.append(f"[{link_counter[0]}]{text}")
+                elif href:
+                    link_counter[0] += 1
+                    self.links.append({"text": href, "href": href})
+                    parts.append(f"[{link_counter[0]}]{href}")
+            elif name == "br":
+                parts.append("\n")
+            elif name in {"strong", "b"}:
+                parts.append(child.get_text(" ", strip=True))
+            elif name in {"em", "i"}:
+                parts.append(child.get_text(" ", strip=True))
+            elif name in {"span", "div", "p", "li"}:
+                parts.append(self._render_inline(child, link_counter, log, depth))
+            elif name == "img":
+                alt = child.get("alt", "image")
+                parts.append(f"[{alt}]")
+            else:
+                parts.append(self._render_inline(child, link_counter, log, depth))
+        return " ".join("".join(parts).split())
+
     async def render_text(self, page, title, text):
-        self.links = await page.locator("a[href]").evaluate_all(
-            """els => els.map(a => ({
-                text: (a.innerText || a.getAttribute('aria-label') || a.href).trim(),
-                href: a.href
-            })).filter(x => x.href.startsWith('http'))"""
-        )
+        html = await page.content()
+        soup = BeautifulSoup(html, "html.parser")
+
+        # Remove script/style elements
+        for tag in soup(["script", "style", "noscript", "template", "iframe"]):
+            tag.decompose()
+
+        self.links = []
+        link_counter = [0]
+
+        def render_node(node, log, depth=0):
+            if node is None:
+                return
+            name = getattr(node, "name", None)
+            if name is None:
+                text = str(node).strip()
+                if text:
+                    log.write(" " * (depth * 2) + text)
+                return
+
+            if name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+                heading = node.get_text(" ", strip=True)
+                if heading:
+                    prefix = {"h1": "", "h2": "", "h3": "", "h4": "", "h5": "", "h6": ""}[name]
+                    log.write("")
+                    log.write(prefix + heading.upper() if name == "h1" else prefix + heading)
+                    log.write("-" * min(72, len(heading)))
+            elif name == "p":
+                para = self._render_inline(node, link_counter, log, depth)
+                if para:
+                    log.write("")
+                    log.write(para)
+            elif name == "a":
+                pass  # links are rendered inline inside their parent
+            elif name in {"ul", "ol"}:
+                for i, li in enumerate(node.find_all("li", recursive=False), 1):
+                    marker = f"{i}." if name == "ol" else "•"
+                    li_text = self._render_inline(li, link_counter, log, depth + 1)
+                    log.write(" " * (depth * 2) + f"{marker} {li_text}")
+            elif name in {"li", "div", "section", "article", "main", "header", "footer", "nav"}:
+                for child in node.children:
+                    render_node(child, log, depth)
+            elif name == "br":
+                log.write("")
+            elif name == "blockquote":
+                for child in node.children:
+                    render_node(child, log, depth + 1)
+            elif name in {"pre", "code"}:
+                code = node.get_text("\n", strip=True)
+                if code:
+                    log.write("")
+                    for line in code.splitlines()[:50]:
+                        log.write(" " * (depth * 2) + line)
+                    log.write("")
+            else:
+                for child in node.children:
+                    render_node(child, log, depth)
+
         log = self.log()
         log.clear()
         log.write(title or "Untitled page")
         log.write("=" * min(72, max(20, len(title or ""))))
         log.write(page.url)
         log.write("")
-        # Keep terminal output bounded; scrolling commands fetch the visible document text again.
-        lines = (text or "[No readable page text]").splitlines()
-        for line in lines[:2500]:
-            line = " ".join(line.split())
-            if line:
-                log.write(line)
+
+        body = soup.find("body") or soup
+        render_node(body, log)
+
         log.write("")
         log.write("LINKS:")
         for i, link in enumerate(self.links, 1):
             log.write(f"[{i}] {link['text'][:90]} — {link['href']}")
         log.write("")
         log.write("Tip: type a link number to open it.")
+        log.write("")
 
     async def search(self, query):
         if not query:
