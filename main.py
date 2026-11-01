@@ -197,6 +197,8 @@ class ZapTerminal(App):
         elif cmd == "history": self.show_history()
         elif cmd == "clear": self.log().clear(); self.status("VIEW CLEARED")
         elif cmd == "inputs": self.show_inputs()
+        elif cmd == "update": await self.update_repo()
+        elif cmd == "push": await self.push_repo()
         elif raw.startswith(("http://", "https://", "www.")) or "." in cmd:
             await self.open_url(raw)
         elif cmd == "input" and len(rest) >= 2:
@@ -610,6 +612,40 @@ class ZapTerminal(App):
             return
         self.status("ELEMENT NOT FOUND")
 
+    async def update_repo(self):
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(BASE), "pull", "--rebase", "origin", "main"],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                self.log().clear()
+                self.log().write("REPO UPDATED")
+                self.log().write(result.stdout.strip() or "Already up to date.")
+                self.status("REPO UPDATED • Restart zap to apply changes")
+            else:
+                self.status(f"UPDATE ERROR • {result.stderr.strip()[:120]}")
+        except Exception as exc:
+            self.status(f"UPDATE ERROR • {str(exc)[:80]}")
+
+    async def push_repo(self):
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(BASE), "push", "origin", "main"],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                self.log().clear()
+                self.log().write("REPO PUSHED")
+                self.log().write(result.stdout.strip() or "Everything up to date.")
+                self.status("REPO PUSHED")
+            else:
+                self.status(f"PUSH ERROR • {result.stderr.strip()[:120]}")
+        except Exception as exc:
+            self.status(f"PUSH ERROR • {str(exc)[:80]}")
+
     def show_tabs(self):
         self.log().clear()
         self.log().write("OPEN TABS")
@@ -635,6 +671,8 @@ class ZapTerminal(App):
             "NUMBER                Open numbered link/input",
             "input N <text>        Type text into input field N",
             "click N             Click link/button/input N",
+            "update                Pull latest from GitHub",
+            "push                  Push local changes to GitHub",
             "scroll up|down [px]   Scroll page and refresh text view",
             "scroll top|bottom     Jump to page edge",
             "find TEXT             Find text on page",
