@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, BrowserContext, Page, Error as PlaywrightError
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.widgets import Footer, Input, RichLog, Static
 
 from zap.storage import Storage
@@ -85,8 +86,11 @@ class ZapTerminal(App):
             yield Input(placeholder="Type a command or enter a URL…", id="command")
         yield Footer()
 
-    def log(self):
-        return self.query_one("#page", RichLog)
+    def log(self, **kwargs):
+        try:
+            return _LogProxy(self.query_one("#page", RichLog))
+        except NoMatches:
+            return _NoOpLog()
 
     def status(self, value):
         self.query_one("#status", Static).update(" " + value)
@@ -403,6 +407,37 @@ class ZapTerminal(App):
 
     async def action_scroll_down(self):
         await self.scroll(["down", "600"])
+
+
+class _NoOpLog:
+    def write(self, *args, **kwargs):
+        pass
+
+    def clear(self, *args, **kwargs):
+        pass
+
+    def system(self, *args, **kwargs):
+        pass
+
+    def warning(self, *args, **kwargs):
+        pass
+
+    def error(self, *args, **kwargs):
+        pass
+
+    def __call__(self, *args, **kwargs):
+        pass
+
+
+class _LogProxy(_NoOpLog):
+    def __init__(self, richlog):
+        self._rl = richlog
+
+    def write(self, *args, **kwargs):
+        self._rl.write(*args, **kwargs)
+
+    def clear(self, *args, **kwargs):
+        self._rl.clear(*args, **kwargs)
 
 
 def run():
