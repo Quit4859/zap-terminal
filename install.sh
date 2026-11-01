@@ -56,35 +56,71 @@ say "Installing Chromium browser dependencies..."
 # Install system shared libraries Chromium needs to launch headlessly.
 install_sys_deps() {
   if command -v apt-get >/dev/null 2>&1; then
+    say "Installing system libraries via apt (may require sudo)..."
     sudo apt-get update -qq 2>/dev/null || true
     sudo apt-get install -y -qq \
       libatk1.0-0 libatk-bridge2.0-0 libasound2t64 libgbm-dev libgtk-3-0 \
       libnss3 libxss1 libxtst6 libxrandr2 libatspi2.0-0 libxcomposite1 \
       libxdamage1 libxfixes3 libxkbcommon0 libx11-xcb1 libxcb-dri3-0 \
       libxcb-xfixes0 libxcb-randr0 libxcb-shm0 libcups2 libdrm2 \
-      libpango-1.0-0 libpangocairo-1.0-0 2>/dev/null || true
+      libpango-1.0-0 libpangocairo-1.0-0
   elif command -v apk >/dev/null 2>&1; then
+    say "Installing system libraries via apk (may require sudo)..."
     sudo apk add --no-cache \
       atk atk-bridge cairo gdk-pixbuf gtk+3.0 libxcomposite libxcursor \
-      libxdamage libxi libxtst nss pango udev xorg-server 2>/dev/null || true
+      libxdamage libxi libxtst nss pango udev xorg-server
   elif command -v dnf >/dev/null 2>&1; then
+    say "Installing system libraries via dnf (may require sudo)..."
     sudo dnf install -y \
       atk atk-bridge cairo gdk-pixbuf2 gtk3 libXcomposite libXcursor \
-      libXdamage libXi libXtst nss pango xorg-x11-server-Xorg 2>/dev/null || true
+      libXdamage libXi libXtst nss pango xorg-x11-server-Xorg
   elif command -v yum >/dev/null 2>&1; then
+    say "Installing system libraries via yum (may require sudo)..."
     sudo yum install -y \
       atk atk-bridge cairo gdk-pixbuf2 gtk3 libXcomposite libXcursor \
-      libXdamage libXi libXtst nss pango xorg-x11-server-Xorg 2>/dev/null || true
+      libXdamage libXi libXtst nss pango xorg-x11-server-Xorg
   elif command -v pacman >/dev/null 2>&1; then
+    say "Installing system libraries via pacman (may require sudo)..."
     sudo pacman -S --needed --noconfirm \
       atk at-spi2-core cairo gdk-pixbuf2 gtk3 libxcomposite libxcursor \
-      libxdamage libxi libxtst nss pango xorg-server 2>/dev/null || true
+      libxdamage libxi libxtst nss pango xorg-server
   elif command -v brew >/dev/null 2>&1; then
-    brew install chromium 2>/dev/null || true
+    say "Installing Chromium via brew (may require sudo)..."
+    brew install chromium
+  else
+    say "No supported package manager found. Chromium system libraries must be installed manually."
   fi
 }
 
-install_sys_deps
+install_sys_deps || say "WARNING: system library install may have failed; Zap may not launch without them."
+
+# Verify Chromium can launch.
+say "Verifying Chromium launches..."
+if ! "$INSTALL_DIR/.venv/bin/python" -c "
+import asyncio, sys
+from pathlib import Path
+from playwright.async_api import async_playwright
+async def main():
+    pw = await async_playwright().start()
+    try:
+        ctx = await pw.chromium.launch_persistent_context(
+            user_data_dir=str(Path('/tmp/zap-verify-profile')),
+            headless=True, viewport={'width': 800, 'height': 600},
+            args=['--no-sandbox', '--disable-dev-shm-usage']
+        )
+        await ctx.close()
+    except Exception as e:
+        print('CHROMIUM_CHECK_FAILED:', e)
+        sys.exit(1)
+    finally:
+        await pw.stop()
+asyncio.run(main())
+" 2>/dev/null; then
+  say "WARNING: Chromium could not launch. Zap may show 'ENGINE ERROR'."
+  say "Install the missing system libraries manually (see install.sh for the package list)."
+else
+  say "Chromium launches successfully."
+fi
 
 cat > "$BIN_DIR/zap" <<EOF
 #!/usr/bin/env bash
