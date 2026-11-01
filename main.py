@@ -10,6 +10,8 @@ import httpx
 from bs4 import BeautifulSoup
 from PIL import Image
 from playwright.async_api import async_playwright, BrowserContext, Page, Error as PlaywrightError
+from rich.color import Color
+from rich.style import Style
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -360,18 +362,18 @@ class ZapTerminal(App):
 
     def refresh_visual(self):
         visual = self.render_visual()
-        if visual:
-            try:
-                self.query_one("#page-visual", Static).update(visual)
-            except Exception:
-                pass
+        try:
+            self.query_one("#page-visual", Static).update(visual)
+        except Exception:
+            pass
 
-    def image_to_ansi(self, image_data: bytes, width: int = 100, height: int = 40) -> str:
-        """Convert PNG bytes to ANSI art using Carbonyl-style half-block rendering."""
+    def image_to_rich(self, image_data: bytes, width: int = 100, height: int = 40) -> Text:
+        """Convert PNG bytes to Rich Text with per-cell colors (Carbonyl-style half-block).
+        Uses Textual/Rich Style objects so no raw ANSI escape codes leak during scroll."""
         try:
             image = Image.open(io.BytesIO(image_data)).convert("RGB")
         except Exception:
-            return ""
+            return Text("")
 
         orig_w, orig_h = image.size
         aspect = orig_h / orig_w
@@ -384,30 +386,31 @@ class ZapTerminal(App):
         pixels = image.load()
         w, h = image.size
 
-        lines = []
+        text = Text()
         for y in range(0, h - 1, 2):
-            line = ""
             for x in range(w):
                 r1, g1, b1 = pixels[x, y]
                 r2, g2, b2 = pixels[x, y + 1]
-                # Upper half block ▀: top pixel = fg, bottom pixel = bg
-                line += f"\033[38;2;{r1};{g1};{b1}m\033[48;2;{r2};{g2};{b2}m▀"
-            line += "\033[0m"
-            lines.append(line)
+                # Upper half block ▀: top pixel = foreground, bottom pixel = background
+                style = Style(
+                    color=Color.from_rgb(r1, g1, b1),
+                    bgcolor=Color.from_rgb(r2, g2, b2),
+                )
+                text.append("▀", style=style)
+            text.append("\n")
 
-        return "\n".join(lines)
+        return text
 
     def render_visual(self):
         if not self.last_screenshot:
-            return ""
-        # Get terminal size
+            return Text("")
         try:
             size = self.size
             width = max(40, min(120, size.width - 4))
             height = max(20, min(60, size.height - 6))
         except Exception:
             width, height = 100, 40
-        return Text.from_ansi(self.image_to_ansi(self.last_screenshot, width, height)) if self.last_screenshot else ""
+        return self.image_to_rich(self.last_screenshot, width, height)
 
     def action_toggle_visual(self):
         self.visual_mode = not self.visual_mode
