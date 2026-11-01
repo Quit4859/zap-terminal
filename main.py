@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import shlex
 from pathlib import Path
 from urllib.parse import quote_plus, urlsplit
 
 import httpx
 from bs4 import BeautifulSoup
+from PIL import Image
 from playwright.async_api import async_playwright, BrowserContext, Page, Error as PlaywrightError
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
@@ -31,6 +34,7 @@ Screen { background: #111318; color: #E7E9ED; }
 .muted { color: #9299A6; }
 #tabs { height: 3; margin: 0 1; padding: 0 1; border: round #343944; }
 #page { height: 1fr; margin: 0 1; padding: 1 2; border: round #343944; background: #14171D; }
+#page-visual { height: 1fr; margin: 0 1; padding: 0; border: round #343944; background: #000000; display: none; }
 #status { height: 1; padding: 0 2; color: #A3A9B5; background: #191C23; }
 #command-row { height: 3; margin: 0 1; }
 #prompt { width: 3; content-align: center middle; color: #FF923D; text-style: bold; }
@@ -47,6 +51,7 @@ class ZapTerminal(App):
         ("ctrl+l", "focus_command", "Command"),
         ("ctrl+t", "new_tab", "New tab"),
         ("ctrl+w", "close_tab", "Close tab"),
+        ("ctrl+v", "toggle_visual", "Visual"),
         ("pageup", "scroll_up", "Page up"),
         ("pagedown", "scroll_down", "Page down"),
     ]
@@ -60,6 +65,8 @@ class ZapTerminal(App):
         self.storage = Storage(DB)
         self.links: list[tuple[str, str]] = []
         self.current_url = ""
+        self.visual_mode = False
+        self.last_screenshot: bytes | None = None
         self.http = httpx.AsyncClient(timeout=15, follow_redirects=True,
                                       headers={"User-Agent": "ZAP-Terminal/3.0"})
 
@@ -80,6 +87,7 @@ class ZapTerminal(App):
                 yield Static("open · search · tabs · back · scroll · bookmarks · history", classes="muted")
         yield Static(" TABS  •  starting…", id="tabs")
         yield RichLog(id="page", wrap=True, markup=False, highlight=False)
+        yield Static(id="page-visual")
         yield Static(" STARTING  •  Initializing browser engine", id="status")
         with Horizontal(id="command-row"):
             yield Static("❯", id="prompt")
@@ -217,6 +225,7 @@ class ZapTerminal(App):
             title = await page.title()
             text = await page.locator("body").inner_text(timeout=10000)
             await self.render_text(page, title, text)
+            await self.capture_screenshot(page)
             if record:
                 self.storage.add_history(page.url, title)
             self.update_tabs()
@@ -341,6 +350,79 @@ class ZapTerminal(App):
         log.write("Tip: type a link number to open it.")
         log.write("")
 
+    async def capture_screenshot(self, page):
+        try:
+            self.last_screenshot = await page.screenshot(full_page=False, type="png")
+        except Exception:
+            self.last_screenshot = None
+        if self.visual_mode:
+            self.refresh_visual()
+
+    def refresh_visual(self):
+        visual = self.render_visual()
+        if visual:
+            try:
+                self.query_one("#page-visual", Static).update(visual)
+            except Exception:
+                pass
+
+    def image_to_ansi(self, image_data: bytes, width: int = 100, height: int = 40) -> str:
+        """Convert PNG bytes to ANSI art using Carbonyl-style half-block rendering."""
+        try:
+            image = Image.open(io.BytesIO(image_data)).convert("RGB")
+        except Exception:
+            return ""
+
+        orig_w, orig_h = image.size
+        aspect = orig_h / orig_w
+        # Terminal chars are ~2x taller than wide → halve the height for correct aspect
+        new_h = int(width * aspect * 0.5)
+        if new_h > height:
+            new_h = height
+        image = image.resize((width, new_h), Image.LANCZOS)
+
+        pixels = image.load()
+        w, h = image.size
+
+        lines = []
+        for y in range(0, h - 1, 2):
+            line = ""
+            for x in range(w):
+                r1, g1, b1 = pixels[x, y]
+                r2, g2, b2 = pixels[x, y + 1]
+                # Upper half block ▀: top pixel = fg, bottom pixel = bg
+                line += f"\033[38;2;{r1};{g1};{b1}m\033[48;2;{r2};{g2};{b2}m▀"
+            line += "\033[0m"
+            lines.append(line)
+
+        return "\n".join(lines)
+
+    def render_visual(self):
+        if not self.last_screenshot:
+            return ""
+        # Get terminal size
+        try:
+            size = self.size
+            width = max(40, min(120, size.width - 4))
+            height = max(20, min(60, size.height - 6))
+        except Exception:
+            width, height = 100, 40
+        return Text.from_ansi(self.image_to_ansi(self.last_screenshot, width, height)) if self.last_screenshot else ""
+
+    def action_toggle_visual(self):
+        self.visual_mode = not self.visual_mode
+        page_widget = self.query_one("#page", RichLog)
+        visual_widget = self.query_one("#page-visual", Static)
+        if self.visual_mode:
+            page_widget.display = False
+            visual_widget.display = True
+            self.refresh_visual()
+            self.status("VISUAL MODE • Ctrl+V to switch back to text")
+        else:
+            page_widget.display = True
+            visual_widget.display = False
+            self.status("TEXT MODE • Ctrl+V to view page visually")
+
     async def search(self, query):
         if not query:
             self.status("USAGE • search your query")
@@ -384,6 +466,7 @@ class ZapTerminal(App):
                 title = await page.title()
                 text = await page.locator("body").inner_text(timeout=5000)
                 await self.render_text(page, title, text)
+                await self.capture_screenshot(page)
                 self.update_tabs()
                 self.status("ACTIVE TAB • " + page.url[:110])
             except Exception as exc:
