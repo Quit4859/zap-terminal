@@ -65,7 +65,8 @@ class ZapTerminal(App):
         self.pages: list[Page] = []
         self.active = 0
         self.storage = Storage(DB)
-        self.links: list[tuple[str, str]] = []
+        self.links: list[dict] = []
+        self.inputs: list[dict] = []
         self.current_url = ""
         self.visual_mode = False
         self.last_screenshot: bytes | None = None
@@ -195,12 +196,22 @@ class ZapTerminal(App):
         elif cmd == "bookmarks": self.show_bookmarks()
         elif cmd == "history": self.show_history()
         elif cmd == "clear": self.log().clear(); self.status("VIEW CLEARED")
+        elif cmd == "inputs": self.show_inputs()
         elif raw.startswith(("http://", "https://", "www.")) or "." in cmd:
             await self.open_url(raw)
-        elif cmd.isdigit() and self.links:
+        elif cmd == "input" and len(rest) >= 2:
+            n = int(rest[0])
+            text = " ".join(rest[1:])
+            await self.type_input(n, text)
+        elif cmd == "click" and len(rest) >= 1:
+            n = int(rest[0])
+            await self.click_element(n)
+        elif cmd.isdigit():
             n = int(cmd)
-            if 1 <= n <= len(self.links):
+            if self.links and 1 <= n <= len(self.links):
                 await self.open_url(self.links[n-1]["href"])
+            elif self.inputs and len(self.links) < n <= len(self.links) + len(self.inputs):
+                await self.click_element(n)
             else:
                 self.status("LINK NOT FOUND")
         else:
@@ -251,15 +262,32 @@ class ZapTerminal(App):
                     parts.append(text)
             elif name == "a":
                 href = child.get("href", "")
-                text = child.get_text(" ", strip=True)
-                if href and href.startswith("http") and text:
+                link_text = child.get_text(" ", strip=True)
+                if href and href.startswith("http"):
                     link_counter[0] += 1
-                    self.links.append({"text": text, "href": href})
-                    parts.append(f"[{link_counter[0]}]{text}")
-                elif href:
-                    link_counter[0] += 1
-                    self.links.append({"text": href, "href": href})
-                    parts.append(f"[{link_counter[0]}]{href}")
+                    self.links.append({"text": link_text or href, "href": href, "kind": "link"})
+                    parts.append(f"[{link_counter[0]}]{link_text}")
+            elif name in {"input", "textarea"}:
+                itype = child.get("type", "text") if name == "input" else "textarea"
+                iname = child.get("name", "")
+                placeholder = child.get("placeholder", "")
+                input_text = child.get_text(" ", strip=True) if name == "textarea" else ""
+                link_counter[0] += 1
+                self.inputs.append({
+                    "num": link_counter[0], "kind": "input", "type": itype,
+                    "name": iname, "placeholder": placeholder, "value": input_text,
+                })
+                label = placeholder or iname or itype
+                parts.append(f"[{link_counter[0]}]{label}")
+            elif name == "button":
+                btext = child.get_text(" ", strip=True)
+                btype = child.get("type", "button")
+                link_counter[0] += 1
+                self.inputs.append({
+                    "num": link_counter[0], "kind": "button", "type": btype,
+                    "name": child.get("name", ""), "placeholder": btext, "value": btext,
+                })
+                parts.append(f"[{link_counter[0]}]{btext or btype}")
             elif name == "br":
                 parts.append("\n")
             elif name in {"strong", "b"}:
@@ -284,6 +312,7 @@ class ZapTerminal(App):
             tag.decompose()
 
         self.links = []
+        self.inputs = []
         link_counter = [0]
 
         def render_node(node, log, depth=0):
@@ -345,11 +374,14 @@ class ZapTerminal(App):
         render_node(body, log)
 
         log.write("")
-        log.write("LINKS:")
+        log.write("LINKS & INPUTS:")
         for i, link in enumerate(self.links, 1):
             log.write(f"[{i}] {link['text'][:90]} — {link['href']}")
+        for i, inp in enumerate(self.inputs, len(self.links) + 1):
+            label = inp.get("placeholder") or inp.get("name") or inp.get("type", "")
+            log.write(f"[{i}] ({inp['kind']}) {label[:70]}")
         log.write("")
-        log.write("Tip: type a link number to open it.")
+        log.write("Tip: type a link/input number to open it. Use 'input N <text>' to type into a field.")
         log.write("")
 
     async def capture_screenshot(self, page):
@@ -513,10 +545,70 @@ class ZapTerminal(App):
 
     def show_links(self):
         self.log().clear()
-        self.log().write("PAGE LINKS")
+        self.log().write("PAGE LINKS & INPUTS")
         for i, link in enumerate(self.links, 1):
             self.log().write(f"[{i}] {link['text'][:100]} — {link['href']}")
-        if not self.links: self.log().write("No links found.")
+        for i, inp in enumerate(self.inputs, len(self.links) + 1):
+            label = inp.get("placeholder") or inp.get("name") or inp.get("type", "")
+            self.log().write(f"[{i}] ({inp['kind']}) {label[:70]}")
+        if not self.links and not self.inputs: self.log().write("No links or inputs found.")
+
+    def show_inputs(self):
+        self.log().clear()
+        self.log().write("FORM INPUTS")
+        for i, inp in enumerate(self.inputs, 1):
+            self.log().write(f"[{i}] ({inp['kind']}) {inp.get('type')} • {inp.get('placeholder') or inp.get('name') or ''}")
+        if not self.inputs: self.log().write("No form inputs found.")
+
+    async def type_input(self, n, text):
+        page = self.current()
+        if not page: return
+        idx = n - len(self.links) - 1
+        if not (0 <= idx < len(self.inputs)):
+            self.status("INPUT NOT FOUND")
+            return
+        inp = self.inputs[idx]
+        try:
+            if inp["kind"] == "input":
+                itype = inp["type"]
+                if itype in {"submit", "button", "checkbox", "radio"}:
+                    await page.click(f"input[name='{inp['name']}']", timeout=5000)
+                else:
+                    await page.fill(f"input[name='{inp['name']}']", text, timeout=5000)
+            elif inp["kind"] == "textarea":
+                await page.fill("textarea", text, timeout=5000)
+            elif inp["kind"] == "button":
+                await page.click("button", timeout=5000)
+            self.status(f"TYPED INTO FIELD {n}")
+        except Exception as exc:
+            self.status(f"INPUT ERROR • {str(exc)[:80]}")
+
+    async def click_element(self, n):
+        page = self.current()
+        if not page: return
+        if self.links and 1 <= n <= len(self.links):
+            await self.open_url(self.links[n-1]["href"])
+            return
+        idx = n - len(self.links) - 1
+        if self.inputs and 0 <= idx < len(self.inputs):
+            inp = self.inputs[idx]
+            try:
+                if inp["kind"] == "button":
+                    await page.click("button", timeout=5000)
+                elif inp["kind"] == "input" and inp["type"] in {"submit", "button"}:
+                    await page.click(f"input[type='{inp['type']}']", timeout=5000)
+                else:
+                    await page.click(f"input[name='{inp['name']}']", timeout=5000)
+                await page.wait_for_timeout(500)
+                title = await page.title()
+                text = await page.locator("body").inner_text(timeout=10000)
+                await self.render_text(page, title, text)
+                await self.capture_screenshot(page)
+                self.status("CLICKED • " + page.url[:100])
+            except Exception as exc:
+                self.status(f"CLICK ERROR • {str(exc)[:80]}")
+            return
+        self.status("ELEMENT NOT FOUND")
 
     def show_tabs(self):
         self.log().clear()
@@ -539,8 +631,10 @@ class ZapTerminal(App):
             "tab switch N          Switch to tab N",
             "tab close             Close active tab",
             "tabs                  List tabs",
-            "links                 List numbered links",
-            "NUMBER                Open numbered link",
+            "links                 List numbered links & inputs",
+            "NUMBER                Open numbered link/input",
+            "input N <text>        Type text into input field N",
+            "click N             Click link/button/input N",
             "scroll up|down [px]   Scroll page and refresh text view",
             "scroll top|bottom     Jump to page edge",
             "find TEXT             Find text on page",
@@ -551,7 +645,7 @@ class ZapTerminal(App):
             "quit                  Exit ZAP",
             "",
             "Ctrl+L focus command · Ctrl+T new tab · Ctrl+W close tab",
-            "PageUp/PageDown scroll terminal output.",
+            "Ctrl+V toggle visual  · PageUp/PageDown scroll terminal output.",
         ]:
             self.log().write(line)
         self.status("HELP")
