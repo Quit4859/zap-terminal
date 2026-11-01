@@ -86,7 +86,8 @@ class ZapTerminal(App):
             yield Input(placeholder="Type a command or enter a URL…", id="command")
         yield Footer()
 
-    def log(self, **kwargs):
+    @property
+    def log(self):
         try:
             return _LogProxy(self.query_one("#page", RichLog))
         except NoMatches:
@@ -438,7 +439,7 @@ class _NoOpLog:
         pass
 
     def __call__(self, *args, **kwargs):
-        pass
+        return self
 
 
 class _LogProxy(_NoOpLog):
