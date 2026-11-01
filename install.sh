@@ -34,7 +34,6 @@ if [ -d "$INSTALL_DIR/.git" ]; then
     say "ZAP is already up to date."
   else
     say "Update available. Updating ZAP..."
-    git -C "$INSTALL_DIR" checkout --quiet "$BRANCH"
     git -C "$INSTALL_DIR" reset --hard --quiet "origin/$BRANCH"
   fi
 else
